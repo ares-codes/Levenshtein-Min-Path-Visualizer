@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Levenshtein Path Solver</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <h1>Levenshtein Min-Path Visualizer</h1>
+
+    <div class="controls">
+      <div class="input-group">
+        <input
+          type="text"
+          id="sourceWord"
+          value="cat"
+          placeholder="Source word"
+          oninput="validateInputs()"
+          onkeydown="handleKeyDown(event)"
+        />
+      </div>
+      <div class="input-group">
+        <input
+          type="text"
+          id="targetWord"
+          value="dog"
+          placeholder="Target word"
+          oninput="validateInputs()"
+          onkeydown="handleKeyDown(event)"
+        />
+      </div>
+      <button id="findBtn" onclick="solveAndDraw()">Find Paths</button>
+    </div>
+
+    <div id="errorMsg"></div>
+
+    <div id="stats">
+      Edit Distance: <span id="distVal">-</span> | Total Min Paths:
+      <span id="pathsVal">-</span>
+    </div>
+
+    <div class="canvas-container" id="canvasContainer">
+      <div id="loader" class="loader-overlay">
+        <div class="spinner"></div>
+        <div id="loaderText" class="loader-text">Loading Graph...</div>
+      </div>
+      <canvas id="graphCanvas"></canvas>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
