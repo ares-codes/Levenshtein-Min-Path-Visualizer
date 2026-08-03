@@ -112,6 +112,29 @@ function handleKeyDown(event) {
   }
 }
 
+function swapWords() {
+  const srcInput = document.getElementById("sourceWord");
+  const tgtInput = document.getElementById("targetWord");
+
+  // 1. Swap input values in the UI
+  const temp = srcInput.value;
+  srcInput.value = tgtInput.value;
+  tgtInput.value = temp;
+
+  // 2. Validate the swapped inputs
+  if (!validateInputs()) return;
+
+  // 3. Reverse paths in memory (Instant—no WebWorker recalculation needed)
+  if (lastRenderedPaths.length > 0) {
+    lastRenderedPaths = lastRenderedPaths.map((path) => [...path].reverse());
+    lastSearch = {
+      src: srcInput.value.trim().toLowerCase(),
+      tgt: tgtInput.value.trim().toLowerCase(),
+    };
+    renderGraph(lastRenderedPaths);
+  }
+}
+
 function solveAndDraw() {
   if (!isGraphLoaded || !validateInputs()) return;
 
