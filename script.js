@@ -6,11 +6,9 @@ let lastRenderedPaths = [];
 
 let renderedNodes = [];
 let hoveredNode = null;
-
 let lastSearch = { src: "", tgt: "" };
 
 function initWorker() {
-  // Pass the dedicated Web Worker file directly
   worker = new Worker("worker.js");
 
   worker.onmessage = function (e) {
@@ -27,6 +25,7 @@ function initWorker() {
       document.getElementById("pathsVal").innerText = paths.length;
 
       lastRenderedPaths = paths;
+      hoveredNode = null;
       renderGraph(paths);
       hideLoader();
     }
@@ -60,8 +59,7 @@ async function loadGraphFromFile() {
     worker.postMessage({ action: "PARSE_GRAPH", payload: textData });
   } catch (err) {
     console.error("Failed to load connections.txt file:", err);
-    document.getElementById("distVal").innerText =
-      "Error loading connections.txt";
+    document.getElementById("distVal").innerText = "Error loading graph file";
     hideLoader();
   }
 }
@@ -107,8 +105,20 @@ function validateInputs() {
 }
 
 function handleKeyDown(event) {
+  const srcInput = document.getElementById("sourceWord");
+  const tgtInput = document.getElementById("targetWord");
+  const activeEl = document.activeElement;
+  const isInputFocused = activeEl === srcInput || activeEl === tgtInput;
+
+  if (event.code === "Space" && !isInputFocused) {
+    event.preventDefault();
+    swapWords();
+    return;
+  }
+
   if (event.key === "Enter") {
     solveAndDraw();
+    return;
   }
 }
 
@@ -116,21 +126,20 @@ function swapWords() {
   const srcInput = document.getElementById("sourceWord");
   const tgtInput = document.getElementById("targetWord");
 
-  // 1. Swap input values in the UI
   const temp = srcInput.value;
   srcInput.value = tgtInput.value;
   tgtInput.value = temp;
 
-  // 2. Validate the swapped inputs
   if (!validateInputs()) return;
 
-  // 3. Reverse paths in memory (Instant—no WebWorker recalculation needed)
   if (lastRenderedPaths.length > 0) {
     lastRenderedPaths = lastRenderedPaths.map((path) => [...path].reverse());
     lastSearch = {
       src: srcInput.value.trim().toLowerCase(),
       tgt: tgtInput.value.trim().toLowerCase(),
     };
+
+    hoveredNode = null;
     renderGraph(lastRenderedPaths);
   }
 }
@@ -190,7 +199,6 @@ function renderGraph(paths) {
     rect.height / (maxVerticalNodes + 1) / 3.5,
   );
   nodeRadius = Math.max(7, nodeRadius);
-
   const fontSize = Math.max(9, Math.min(13, nodeRadius * 0.75));
 
   const nodeCoords = new Map();
@@ -202,17 +210,15 @@ function renderGraph(paths) {
 
     nodes.forEach((word, nodeIndex) => {
       const y = ySpacing * (nodeIndex + 1);
-      nodeCoords.set(word, { x, y });
-      renderedNodes.push({ word, x, y, radius: nodeRadius });
+      nodeCoords.set(word, { x, y, layerIndex });
+      renderedNodes.push({ word, x, y, radius: nodeRadius, layerIndex });
     });
   });
 
-  // Determine graph density
   const isDenseGraph =
     numLayers > 12 || maxVerticalNodes > 12 || paths.length > 10;
   const defaultShowLabels = !isDenseGraph;
 
-  // Compute Directed Neighbors & Predecessors for hover interaction
   const predecessors = new Set();
   const successors = new Set();
   const activeEdges = new Set();
@@ -242,32 +248,43 @@ function renderGraph(paths) {
     }
   });
 
-  // Draw Edges
+  // Batch Edge Draw Operations
+  const inactiveEdgesPath = new Path2D();
+  const activeEdgesPath = new Path2D();
+
   edges.forEach((edge) => {
     const [u, v] = edge.split("->");
     const p1 = nodeCoords.get(u);
     const p2 = nodeCoords.get(v);
 
-    const isActive = activeEdges.has(edge);
-
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-
-    if (hoveredNode) {
-      ctx.lineWidth = isActive ? Math.max(2.5, nodeRadius / 4) : 1;
-      ctx.strokeStyle = isActive ? "#38bdf8" : "rgba(71, 85, 105, 0.25)";
+    if (activeEdges.has(edge)) {
+      activeEdgesPath.moveTo(p1.x, p1.y);
+      activeEdgesPath.lineTo(p2.x, p2.y);
     } else {
-      ctx.lineWidth = Math.max(1, nodeRadius / 10);
-      ctx.strokeStyle = "#475569";
+      inactiveEdgesPath.moveTo(p1.x, p1.y);
+      inactiveEdgesPath.lineTo(p2.x, p2.y);
     }
-    ctx.stroke();
   });
 
-  // Draw Nodes & Text
+  // Draw inactive edges
+  ctx.lineWidth = hoveredNode ? 1 : Math.max(1, nodeRadius / 10);
+  ctx.strokeStyle = hoveredNode ? "rgba(71, 85, 105, 0.25)" : "#475569";
+  ctx.stroke(inactiveEdgesPath);
+
+  // Draw active edges
+  if (hoveredNode && activeEdges.size > 0) {
+    ctx.lineWidth = Math.max(2.5, nodeRadius / 4);
+    ctx.strokeStyle = "#38bdf8";
+    ctx.stroke(activeEdgesPath);
+  }
+
+  // Draw Nodes & Text Labels
+  const firstWord = paths[0][0];
+  const lastWord = paths[0][paths[0].length - 1];
+
   nodeCoords.forEach((coord, word) => {
-    const isStart = word === paths[0][0];
-    const isEnd = word === paths[0][paths[0].length - 1];
+    const isStart = word === firstWord;
+    const isEnd = word === lastWord;
     const isHovered = hoveredNode && hoveredNode.word === word;
     const isPredecessor = predecessors.has(word);
     const isSuccessor = successors.has(word);
@@ -275,15 +292,10 @@ function renderGraph(paths) {
     ctx.beginPath();
     ctx.arc(coord.x, coord.y, nodeRadius, 0, 2 * Math.PI);
 
-    if (isHovered) {
-      ctx.fillStyle = "#f59e0b"; // Gold
-    } else if (isPredecessor) {
-      ctx.fillStyle = "#a855f7"; // Purple (Inputs)
-    } else if (isSuccessor) {
-      ctx.fillStyle = "#06b6d4"; // Cyan (Outputs)
-    } else {
-      ctx.fillStyle = isStart ? "#10b981" : isEnd ? "#ef4444" : "#0284c7";
-    }
+    if (isHovered) ctx.fillStyle = "#f59e0b";
+    else if (isPredecessor) ctx.fillStyle = "#a855f7";
+    else if (isSuccessor) ctx.fillStyle = "#06b6d4";
+    else ctx.fillStyle = isStart ? "#10b981" : isEnd ? "#ef4444" : "#0284c7";
 
     ctx.fill();
 
@@ -300,16 +312,14 @@ function renderGraph(paths) {
           : "#f8fafc";
     ctx.stroke();
 
-    const indexInLayer = Array.from(
-      renderedNodes.filter((n) => Math.abs(n.x - coord.x) < 1),
-    ).findIndex((n) => n.word === word);
+    if (defaultShowLabels) {
+      const indexInLayer = renderedNodes
+        .filter((n) => n.layerIndex === coord.layerIndex)
+        .findIndex((n) => n.word === word);
 
-    const isStaggeredAbove = indexInLayer % 2 === 0;
-    const textOffset = isStaggeredAbove ? -(nodeRadius + 8) : nodeRadius + 14;
+      const isStaggeredAbove = indexInLayer % 2 === 0;
+      const textOffset = isStaggeredAbove ? -(nodeRadius + 8) : nodeRadius + 14;
 
-    const shouldDrawText = defaultShowLabels;
-
-    if (shouldDrawText) {
       ctx.fillStyle = isHovered
         ? "#fbbf24"
         : isPredecessor
@@ -327,7 +337,7 @@ function renderGraph(paths) {
     }
   });
 
-  // Draw Tooltip Box
+  // Render Hover Tooltip
   if (hoveredNode && isDenseGraph) {
     const text = hoveredNode.word;
     ctx.font = "bold 14px monospace";
@@ -346,7 +356,11 @@ function renderGraph(paths) {
     ctx.strokeStyle = "#fbbf24";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.roundRect(tx, ty, tooltipWidth, tooltipHeight, 6);
+    if (ctx.roundRect) {
+      ctx.roundRect(tx, ty, tooltipWidth, tooltipHeight, 6);
+    } else {
+      ctx.rect(tx, ty, tooltipWidth, tooltipHeight);
+    }
     ctx.fill();
     ctx.stroke();
 
@@ -357,9 +371,14 @@ function renderGraph(paths) {
   }
 }
 
-// Set up Canvas event handlers & DOM load triggers
 document.addEventListener("DOMContentLoaded", () => {
   const canvas = document.getElementById("graphCanvas");
+  const srcInput = document.getElementById("sourceWord");
+
+  if (srcInput) {
+    srcInput.focus();
+    srcInput.select();
+  }
 
   canvas.addEventListener("mousemove", (e) => {
     const rect = canvas.getBoundingClientRect();
@@ -367,7 +386,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const my = e.clientY - rect.top;
 
     let found = null;
-    for (const node of renderedNodes) {
+    for (let i = 0; i < renderedNodes.length; i++) {
+      const node = renderedNodes[i];
       const dist = Math.hypot(node.x - mx, node.y - my);
       if (dist <= node.radius + 6) {
         found = node;
@@ -384,12 +404,37 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  canvas.addEventListener("click", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    for (let i = 0; i < renderedNodes.length; i++) {
+      const node = renderedNodes[i];
+      const dist = Math.hypot(node.x - mx, node.y - my);
+      if (dist <= node.radius + 6) {
+        hoveredNode = node;
+        renderGraph(lastRenderedPaths);
+        break;
+      }
+    }
+  });
+
+  document.addEventListener("keydown", handleKeyDown);
+
+  // Debounced Resize Observer to prevent lag when dragging window boundaries
+  let resizeTimeout = null;
+  const resizeObserver = new ResizeObserver(() => {
+    clearTimeout(resizeTimeout);
+    resizeTimeout = setTimeout(() => {
+      if (lastRenderedPaths.length > 0) {
+        renderGraph(lastRenderedPaths);
+      }
+    }, 100);
+  });
+  resizeObserver.observe(canvas.parentElement || canvas);
+
   initWorker();
   loadGraphFromFile();
 });
 
-window.onresize = () => {
-  if (lastRenderedPaths.length > 0) {
-    renderGraph(lastRenderedPaths);
-  }
-};
