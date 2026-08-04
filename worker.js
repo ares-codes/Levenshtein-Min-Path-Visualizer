@@ -20,19 +20,34 @@ function parseConnectionsText(text) {
   wordGraph.clear();
   const lines = text.split(/\r?\n/);
 
-  for (const line of lines) {
-    if (!line.trim()) continue;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
 
-    const [wordA, wordB] = line
-      .split(",")
-      .map((w) => (w ? w.trim().toLowerCase() : null));
+    const commaIdx = line.indexOf(",");
+    if (commaIdx === -1) continue;
+
+    const wordA = line.slice(0, commaIdx).trim().toLowerCase();
+    const wordB = line
+      .slice(commaIdx + 1)
+      .trim()
+      .toLowerCase();
+
     if (!wordA || !wordB) continue;
 
-    if (!wordGraph.has(wordA)) wordGraph.set(wordA, new Set());
-    if (!wordGraph.has(wordB)) wordGraph.set(wordB, new Set());
+    let setA = wordGraph.get(wordA);
+    if (!setA) {
+      setA = new Set();
+      wordGraph.set(wordA, setA);
+    }
+    setA.add(wordB);
 
-    wordGraph.get(wordA).add(wordB);
-    wordGraph.get(wordB).add(wordA);
+    let setB = wordGraph.get(wordB);
+    if (!setB) {
+      setB = new Set();
+      wordGraph.set(wordB, setB);
+    }
+    setB.add(wordA);
   }
 }
 
@@ -46,65 +61,136 @@ function getMinLevenshteinPaths(src, tgt) {
     return { distance: 1, paths: [[src, tgt]] };
   }
 
+  // Check subpath cache validity
   if (cachedPaths.length > 0) {
     let slicedPaths = [];
+    let minSubLen = Infinity;
+
     for (const path of cachedPaths) {
       const srcIdx = path.indexOf(src);
       const tgtIdx = path.indexOf(tgt);
 
       if (srcIdx !== -1 && tgtIdx !== -1 && srcIdx < tgtIdx) {
         const subPath = path.slice(srcIdx, tgtIdx + 1);
-        slicedPaths.push(subPath);
-      }
-    }
-
-    if (slicedPaths.length > 0) {
-      const uniqueSubpaths = Array.from(
-        new Set(slicedPaths.map((p) => p.join(","))),
-      ).map((s) => s.split(","));
-
-      const distance = uniqueSubpaths[0].length - 1;
-      return { distance, paths: uniqueSubpaths };
-    }
-  }
-
-  let queue = [[src]];
-  let visitedThisLevel = new Set();
-  let globalVisited = new Set([src]);
-  let foundShortestPath = false;
-  let allMinPaths = [];
-
-  while (queue.length > 0 && !foundShortestPath) {
-    const levelSize = queue.length;
-    visitedThisLevel.clear();
-
-    for (let i = 0; i < levelSize; i++) {
-      const currentPath = queue.shift();
-      const currentWord = currentPath[currentPath.length - 1];
-
-      const neighbors = wordGraph.get(currentWord) || new Set();
-
-      for (const neighbor of neighbors) {
-        if (!globalVisited.has(neighbor)) {
-          const newPath = [...currentPath, neighbor];
-
-          if (neighbor === tgt) {
-            foundShortestPath = true;
-            allMinPaths.push(newPath);
-          } else {
-            visitedThisLevel.add(neighbor);
-            queue.push(newPath);
-          }
+        if (subPath.length < minSubLen) {
+          minSubLen = subPath.length;
+          slicedPaths = [subPath];
+        } else if (subPath.length === minSubLen) {
+          slicedPaths.push(subPath);
         }
       }
     }
 
-    for (const word of visitedThisLevel) {
-      globalVisited.add(word);
+    if (slicedPaths.length > 0) {
+      const pathSet = new Set();
+      const uniqueSubpaths = [];
+      for (const p of slicedPaths) {
+        const key = p.join(",");
+        if (!pathSet.has(key)) {
+          pathSet.add(key);
+          uniqueSubpaths.push(p);
+        }
+      }
+      return { distance: uniqueSubpaths[0].length - 1, paths: uniqueSubpaths };
     }
   }
 
-  const distance =
-    allMinPaths.length > 0 ? allMinPaths[0].length - 1 : "No Path";
-  return { distance, paths: allMinPaths };
+  // Fast Bi-Directional BFS for Shortest Paths
+  return findShortestPathsBiDirectional(src, tgt);
+}
+
+function findShortestPathsBiDirectional(src, tgt) {
+  let forwardVisited = new Map([[src, [[]]]]); // word -> array of predecessor paths
+  let backwardVisited = new Map([[tgt, [[]]]]); // word -> array of successor paths
+
+  let forwardQueue = new Set([src]);
+  let backwardQueue = new Set([tgt]);
+
+  let meetingNodes = new Set();
+  let found = false;
+
+  while (forwardQueue.size > 0 && backwardQueue.size > 0 && !found) {
+    // Always expand the smaller frontier to minimize search space
+    if (forwardQueue.size <= backwardQueue.size) {
+      const nextQueue = new Set();
+      const levelVisited = new Map();
+
+      for (const word of forwardQueue) {
+        const neighbors = wordGraph.get(word) || new Set();
+        const pathsToWord = forwardVisited.get(word);
+
+        for (const neighbor of neighbors) {
+          if (backwardVisited.has(neighbor)) {
+            found = true;
+            meetingNodes.add(neighbor);
+          }
+
+          if (!forwardVisited.has(neighbor)) {
+            if (!levelVisited.has(neighbor)) {
+              levelVisited.set(neighbor, []);
+              nextQueue.add(neighbor);
+            }
+            for (const p of pathsToWord) {
+              levelVisited.get(neighbor).push([...p, word]);
+            }
+          }
+        }
+      }
+
+      for (const [w, paths] of levelVisited.entries()) {
+        forwardVisited.set(w, paths);
+      }
+      forwardQueue = nextQueue;
+    } else {
+      const nextQueue = new Set();
+      const levelVisited = new Map();
+
+      for (const word of backwardQueue) {
+        const neighbors = wordGraph.get(word) || new Set();
+        const pathsFromWord = backwardVisited.get(word);
+
+        for (const neighbor of neighbors) {
+          if (forwardVisited.has(neighbor)) {
+            found = true;
+            meetingNodes.add(neighbor);
+          }
+
+          if (!backwardVisited.has(neighbor)) {
+            if (!levelVisited.has(neighbor)) {
+              levelVisited.set(neighbor, []);
+              nextQueue.add(neighbor);
+            }
+            for (const p of pathsFromWord) {
+              levelVisited.get(neighbor).push([word, ...p]);
+            }
+          }
+        }
+      }
+
+      for (const [w, paths] of levelVisited.entries()) {
+        backwardVisited.set(w, paths);
+      }
+      backwardQueue = nextQueue;
+    }
+  }
+
+  if (!found || meetingNodes.size === 0) {
+    return { distance: "No Path", paths: [] };
+  }
+
+  // Reconstruct full paths from meeting nodes
+  const fullPaths = [];
+  for (const meet of meetingNodes) {
+    const fPaths = forwardVisited.get(meet) || [[]];
+    const bPaths = backwardVisited.get(meet) || [[]];
+
+    for (const f of fPaths) {
+      for (const b of bPaths) {
+        fullPaths.push([...f, meet, ...b]);
+      }
+    }
+  }
+
+  const distance = fullPaths[0].length - 1;
+  return { distance, paths: fullPaths };
 }
